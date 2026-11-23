@@ -67,7 +67,7 @@ td:first-child{font-family:ui-monospace,Consolas,monospace;font-weight:600}
 <script>
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const SEV={critical:40,high:18,medium:6,low:1},CF={high:1,medium:.6,low:.25},ORD=['critical','high','medium','low'];
-const CAT={mal:'Malware',rhc:'Remotely hosted code',obf:'Obfuscation',udp:'User data & privacy',perm:'Permissions & manifest'};
+const CAT={mal:'Malware',rhc:'Remotely hosted code',obf:'Obfuscation',udp:'User data & privacy',perm:'Permissions & manifest',spam:'Spam & deceptive behavior',imp:'Impersonation & keyword stuffing',ip:'Intellectual property'};
 const COL={critical:'#c4203a',high:'#d9541e',medium:'#b7791f',low:'#2f6fd6',ok:'#1b7f5c'};
 
 /* ── Detection rules: weak = noisy inside minified/vendor code, so confidence drops ── */
@@ -83,7 +83,7 @@ const R=[
 {id:'rscript',cat:'rhc',sev:'critical',policy:'RHC #1: remote script',title:'Remote <script src> in an extension page',why:'Extension pages must not load JavaScript from the network.',re:/<script[^>]+src\s*=\s*["']?https?:\/\//gi,files:/\.html?$/},
 {id:'rimport',cat:'rhc',sev:'critical',policy:'RHC #1: remote script',title:'importScripts()/import() from a remote URL',why:'Loads executable code from a server the developer controls after review.',re:/(?:importScripts|import)\s*\(\s*['"`]https?:\/\//g},
 {id:'dscript',cat:'rhc',sev:'high',policy:'RHC #4: dynamic script element',title:'Dynamic <script> element creation',why:'Builds script tags at runtime, a common vehicle for remote code.',re:/createElement\s*\(\s*['"`]script['"`]\s*\)/g,weak:1},
-{id:'sdk',cat:'rhc',sev:'high',policy:'RHC #2: bundled SDK with remote fetch',title:'Bundled SDK that fetches remote workers/scripts',why:'SDKs such as Tesseract (workerPath), Mellowtel or Whatfix can pull code at runtime. Enforceable even when unused.',re:/workerPath\s*:|mellowtel|whatfix/gi},
+{id:'sdk',cat:'rhc',sev:'high',policy:'RHC #2: bundled SDK with remote fetch',title:'Bundled SDK that fetches remote workers/scripts',why:'SDKs such as Tesseract (workerPath), Mellowtel or Whatfix can pull code at runtime. Enforceable even when unused.',re:/workerPath\s*:|corePath\s*:|mellowtel|whatfix|worker\.min\.js|tesseract(?:\.min)?\.js|js\.stripe\.com\/v3/gi},
 {id:'ast',cat:'rhc',sev:'high',policy:'RHC #3: custom interpreter',title:'Custom JS/AST interpreter (Sval)',why:'An interpreter lets remote “data” act as code, bypassing the MV3 remote-code ban.',re:/\bSval\b|new\s+Interpreter\s*\(/g},
 {id:'dnrcsp',cat:'rhc',sev:'high',policy:'RHC #5: CSP stripping',title:'Content-Security-Policy header manipulation',why:'Removing page CSP headers enables injected remote scripts.',re:/content-security-policy/gi,files:/\.(?:js|mjs|json)$/,skip:/(^|\/)manifest\.json$|_locales/},
 {id:'b64eval',cat:'obf',sev:'critical',policy:'Obfuscation: encoded execution',title:'eval/Function over atob() payload',why:'Decodes a hidden payload and runs it.',re:/(?:eval|Function)\s*\(\s*atob\s*\(/g},
@@ -97,7 +97,17 @@ const R=[
 {id:'fcc',cat:'obf',sev:'medium',policy:'Obfuscation: code building',title:'Repeated String.fromCharCode()',why:'Builds strings from numeric codes.',re:/String\.fromCharCode\s*\(/g,min:4,weak:1},
 {id:'dbg',cat:'obf',sev:'medium',policy:'Obfuscation: anti-analysis',title:'debugger statement',why:'Blocks analysts using DevTools.',re:/^\s*debugger\s*;?\s*$/gm},
 {id:'blob',cat:'obf',sev:'medium',policy:'Obfuscation: encoded blob',title:'Large base64 string literal',why:'Over 1,200 encoded characters in one string may hide a payload.',re:/["'`][A-Za-z0-9+\/]{1200,}={0,2}["'`]/g,weak:1},
-{id:'aff',cat:'udp',sev:'medium',policy:'Deceptive behavior: affiliate injection',title:'Affiliate tracking parameters with navigation code',why:'Rewriting links with affiliate IDs without disclosure violates the affiliate ads policy.',re:/[?&](?:irclickid|cjevent|aff(?:iliate)?_?id|tag)=|\bsubid\b/gi,needs:c=>/tabs\.update|location\.(?:href|assign|replace)/.test(c.all),weak:1}
+{id:'aff',cat:'udp',sev:'medium',policy:'Deceptive behavior: affiliate injection',title:'Affiliate tracking parameters with navigation code',why:'Rewriting links with affiliate IDs without disclosure violates the affiliate ads policy.',re:/[?&](?:irclickid|cjevent|aff(?:iliate)?_?id|tag)=|\bsubid\b/gi,needs:c=>/tabs\.update|location\.(?:href|assign|replace)/.test(c.all),weak:1},
+{id:'codebuild',cat:'obf',sev:'critical',policy:'Obfuscation: code building',title:'Executable code or "javascript:" built by string concatenation',why:'Chrome Web Store prohibits obfuscation regardless of intent. Assembling "javascript:" or <script> tags from fragments hides executable code from reviewers.',re:/['"`]java['"`]\s*\+\s*['"`]script|['"`]javascript['"`]\s*\+\s*['"`]:|['"`]<scr['"`]\s*\+\s*['"`]ipt|['"`]<script['"`]\s*\+|\+\s*['"`]<\/script>['"`]|\[\s*['"`]java['"`]\s*,\s*['"`]script:?['"`]\s*\]\s*\.join/g},
+{id:'xor',cat:'obf',sev:'high',policy:'Obfuscation: character encoding',title:'XOR / custom cipher decoding of strings',why:'Endpoint URLs or variables are decoded at runtime with an XOR cipher, hiding them from review.',re:/charCodeAt\s*\([^)]*\)\s*\^|\^\s*[\w$.]+\.charCodeAt|fromCharCode\s*\([^)]*\^/g,weak:1},
+{id:'rsrc',cat:'rhc',sev:'high',policy:'RHC #4: remote script URL',title:'Script src assigned a remote .js URL',why:'Injecting external JavaScript (workers, SDKs, payment scripts) is remotely hosted code under MV3.',re:/\.src\s*=\s*['"`]https?:\/\/[^'"`]+\.js\b/g,weak:1},
+{id:'gamble',cat:'spam',sev:'high',policy:'Spam: unrelated promotional / gambling redirect',title:'Link to a gambling / betting site',why:'Support or landing URLs that lead to gambling promotion are spam and unrelated to the extension purpose.',re:/https?:\/\/[^\s'"`<>]*(?:casino|1xbet|betting|gambl|sportsbook|jackpot)[^\s'"`<>]*/gi},
+{id:'installtab',cat:'spam',sev:'high',policy:'Spam: unsolicited tab on install',title:'External tab opened on install',why:'Opens an external page automatically after installation (typically an affiliate or promo landing page).',re:/onInstalled[\s\S]{0,600}?tabs\.create\s*\(\s*\{[^}]*url\s*:\s*['"`]https?:\/\//g,files:/\.m?js$/},
+{id:'tgbot',cat:'spam',sev:'medium',policy:'Spam: affiliate / Telegram bot funnel',title:'QR code with Telegram bot link',why:'QR codes leading to Telegram bots that demand a key are a known affiliate/spam funnel.',re:/t(?:elegram)?\.me\/\w*bot\b/gi,needs:c=>/qrcode|qr-code|qr_code|qrious/i.test(c.all)},
+{id:'gmaps',cat:'ip',sev:'high',policy:'IP: scraping proprietary third-party data',title:'Scrapes Google Maps business listings',why:'Harvesting business lead data (phones, sites, reviews) from Google Maps violates IP / terms and gets takedowns.',re:/google\.[a-z.]+\/maps\/(?:search|place|preview)|maps\.google\.com|\/maps\/place\//gi,needs:c=>/scrap|lead|extract|csv|export/i.test(c.all)&&/phone|website|reviews?|address/i.test(c.all),weak:1},
+{id:'hexprop',cat:'obf',sev:'high',policy:'Obfuscation: hex-encoded property access',title:'Method/property names written as \\x hex strings',why:'Names like obj["\\x73\\x70\\x6c\\x69\\x74"] hide which APIs are called from static review.',re:/\[\s*['"](?:\\x[0-9a-f]{2}){3,}['"]\s*\]/gi,min:2},
+{id:'strrot',cat:'obf',sev:'high',policy:'Obfuscation: string-array rotation',title:'Self-executing string-array rotation (push/shift)',why:'The obfuscator.io pattern: a literal array is shuffled at load time so indexes only resolve at runtime.',re:/\[\s*['"]push['"]\s*\]\s*\(\s*[\w$]+\s*\[\s*['"]shift['"]\s*\]|while\s*\(\s*--\s*_0x[a-f0-9]+\s*\)/gi},
+{id:'strlookup',cat:'obf',sev:'high',policy:'Obfuscation: string lookup wrapper',title:'Strings fetched through a hex-offset lookup function',why:'Calls such as _0x3e19("0x1") replace every string and property name with an index into a hidden array.',re:/_0x[a-f0-9]{3,6}\s*\(\s*(?:['"]0x[0-9a-f]+['"]|0x[0-9a-f]+)\s*[,)]/gi,min:3}
 ];
 const SRC=[{k:'cookies',sev:'critical',re:/document\.cookie|chrome\.cookies\.(?:get|getAll)\b/},{k:'passwords',sev:'critical',re:/type\s*=\s*["']?password|\[type=["']?password/i},{k:'clipboard',sev:'high',re:/clipboardData\.getData|clipboard\.readText/},{k:'browsing history',sev:'high',re:/chrome\.history\.(?:search|getVisits)|chrome\.tabs\.query\s*\(\s*\{\s*\}/},{k:'page content',sev:'medium',re:/documentElement\.outerHTML|document\.body\.innerText/}];
 const NET=/\bfetch\s*\(|navigator\.sendBeacon\s*\(|new\s+WebSocket\s*\(|new\s+XMLHttpRequest|new\s+Image\(\)\.src/;
@@ -132,10 +142,6 @@ function scan(files,ctx){
     }
     /* source → network flow inside one file (possible exfiltration) */
     if(!/\.(?:js|mjs|html?)$/.test(name))continue;
-    const net=code.match(NET),ext=/https?:\/\/(?!localhost|127\.0\.0\.1)[\w.-]+\.[a-z]{2,}/i.test(code);
-    if(net&&ext)for(const s of SRC){const m=code.match(s.re);if(!m)continue;
-      const ni=code.search(NET);
-      out.push(mk({cat:'mal',sev:s.sev==='medium'?'medium':'high',policy:'Malware: data exfiltration (verify)',conf:s.sev==='critical'?'medium':'low',rule:'flow',title:`Reads ${s.k} and makes external requests in the same file`,why:`This file both collects ${s.k} and sends network requests to external hosts. Confirm that the request body does not contain this data and that it is disclosed in the privacy policy.`,file:name,line:snip(code,m.index,0).line,snips:[mkSnip(`source: ${s.k}`,code,m.index,m[0].length),mkSnip('network sink',code,ni,6)]}));}
     /* RHC #1: remote data → unsanitized DOM sink (localization & local templates are false positives) */
     if(/\bfetch\s*\(|XMLHttpRequest/.test(code)&&!/_locales|i18n|translat/i.test(name)){
       const re=/\.(?:innerHTML|outerHTML)\s*=|insertAdjacentHTML\s*\(|document\.write\s*\(/g;
@@ -169,13 +175,13 @@ const LOCAL=/^(localhost|127[.]|0[.]0[.]0[.]0|[[]|10[.]|192[.]168[.]|172[.](1[6-
 const DATA={
 'browsing URLs':{re:/location[.]href|[.]url\b|document[.]referrer|tab[.]url/,need:/url|link|site|history|bookmark|tab|translat|search|security|price|coupon|shop|summar|screenshot/i},
 'cookies':{re:/cookie/i,need:/cookie|session|login|account/i},
-'credentials':{re:/password|passwd|credential|secret/i,need:/password|login|sign.?in|auth|account|vault|manager/i},
+'credentials':{re:/password|passwd|credential|e-?mail|sign.?in|sign.?up|log.?in|\bauth(?:entic)?/i,need:/password|login|sign.?in|auth|account|vault|manager/i},
 'clipboard':{re:/clipboard/i,need:/clipboard|copy|paste/i},
 'page content':{re:/innerText|textContent|outerHTML|getSelection|selectionText/,need:/summar|translat|grammar|\bai\b|gpt|gemini|chat|ask|extract|ocr|speech|scrap|note/i},
 'user input':{re:/FormData|(?:input|textarea|field|query|prompt)\w*[.]value/i,need:/form|autofill|translat|grammar|search|chat|\bai\b|note|write|message|feedback/i},
 'device identifiers':{re:/userAgent|deviceId|device_id|uuid|fingerprint|clientId|installId/i,need:/sync|account|licen|premium|subscription|sign.?in/i},
 'analytics/telemetry':{re:/analytics|telemetry|gtag|mixpanel|amplitude|sentry/i,need:/(?!)/}};
-const POL={'browsing URLs':/url|browsing|website|link|page/i,'cookies':/cookie/i,'credentials':/password|credential|login/i,'clipboard':/clipboard/i,'page content':/content|text|page|website/i,'user input':/input|text|prompt|message|form/i,'device identifiers':/identifier|device|browser|user agent/i,'analytics/telemetry':/analytics|telemetry|usage|diagnostic/i};
+const POL={'browsing URLs':/url|browsing|website|link|page/i,'cookies':/cookie/i,'credentials':/password|credential|log.?in|sign|e-?mail|account|authenticat|personal/i,'clipboard':/clipboard/i,'page content':/content|text|page|website/i,'user input':/input|text|prompt|message|form/i,'device identifiers':/identifier|device|browser|user agent/i,'analytics/telemetry':/analytics|telemetry|usage|diagnostic/i};
 const NETHINT=/online|cloud|sync|server|api\b|\bai\b|gpt|gemini|openai|translat|search|weather|price|login|account|backup|share|upload|real.?time|licen|subscription/i;
 
 function dest(code,from){
@@ -193,7 +199,7 @@ function outbound(files,ctx){
     for(const m of code.matchAll(/[.]open\s*\(\s*[\x22\x27\x60](POST|PUT|PATCH)[\x22\x27\x60]\s*,/gi))calls.push([m,m[1].toUpperCase()]);
     for(const [re,t] of [[/navigator[.]sendBeacon\s*\(/g,'BEACON'],[/new\s+WebSocket\s*\(/g,'WEBSOCKET'],[/new\s+Image\(\)[.]src\s*=/g,'IMG-BEACON']])for(const m of code.matchAll(re))calls.push([m,t]);
     for(const [m,t] of calls){
-      const host=dest(code,m.index+m[0].length);if(host==='skip')continue;
+      const host=dest(code,m.index+m[0].length);if(host==='skip'||(t==='WEBSOCKET'&&host==='unknown'&&/localhost|127[.]0[.]0[.]1|0[.]0[.]0[.]0|\[::1\]/.test(code.slice(m.index,m.index+300))))continue;
       const w=code.slice(Math.max(0,m.index-400),m.index+600),k=host+'|'+t,g=G[k]||(G[k]={host,method:t,n:0,cats:new Set(),where:[],snips:[],file:name,line:0});
       Object.keys(DATA).filter(c=>DATA[c].re.test(w)).forEach(c=>g.cats.add(c));
       const s=mkSnip(`${name}:${snip(code,m.index,0).line}`,code,m.index,m[0].length);
@@ -208,7 +214,7 @@ function outbound(files,ctx){
     const need=local?'—':cats.length?(bad.length?'No: '+bad.join(', '):'Yes'):NETHINT.test(pur)?'Unclear':'No: no online feature described';
     rows.push({host:g.host,local,method:g.method,count:g.n,cats,disc,need,where:g.where});
     if(local)continue;
-    const notReq=need.startsWith('No'),sev=notReq?(bad.some(c=>SENS.includes(c))?'critical':'high'):!P?'high':disc==='Yes'?null:'medium';
+    const notReq=false,sev=disc==='Yes'?null:(!P||!hostOK||cats.includes('credentials'))?'high':'medium';
     if(!sev)continue;
     const why=[!P?'No privacy policy was supplied, yet this call sends data off the device.':'',P&&!hostOK?`The policy neither names ${g.host} nor says data goes to third-party or remote servers.`:'',miss.length?`The policy does not describe the data being sent: ${miss.join(', ')}.`:'',notReq?`Not required for the stated functionality${bad.length?' ('+bad.join(', ')+')':''}: the description does not explain why this data leaves the device. Collection must be limited to what the single purpose needs.`:''].filter(Boolean).join(' ');
     findings.push(mk({cat:'udp',sev,conf:g.host==='unknown'||(notReq&&!hasDesc)?'medium':'high',rule:'outbound',policy:notReq?'User Data policy: data not required for functionality':'User Data policy: undisclosed data transmission',title:`${g.method} to ${g.host==='unknown'?'an unresolved host':g.host} sends ${cats.join(', ')||'unspecified data'}`,why,file:g.file,line:g.line,count:g.n,snips:g.snips}));
@@ -226,6 +232,57 @@ async function aiTriage(ctx,F){
   try{let s;try{s=await api.create({initialPrompts:[{role:'system',content:sys}],expectedOutputs:[{type:'text',languages:['en']}]})}catch{s=await api.create({systemPrompt:sys})}
     const t=await s.prompt(prompt);s.destroy&&s.destroy();return JSON.parse(t.slice(t.indexOf('{'),t.lastIndexOf('}')+1))}catch(e){return{error:String(e.message||e)}}
 }
+
+/* ── impersonation, phishing, spam, unused permissions ── */
+const BRAND=/metamask|coinbase|phantom|trust\s?wallet|binance|ledger|trezor|exodus|rabby|uniswap|zoogvpn|nordvpn|expressvpn|surfshark|proton\s?vpn/i;
+const SUSH=/bit\.ly|tinyurl|ngrok|pastebin|herokuapp|\.(?:xyz|top|pw|tk|cc)(?:[\/:?#'"`\s]|$)/i;
+const LANGX=/getUILanguage|navigator\.language|@@ui_locale/;
+const UP={tabs:/\b(?:tab|tabs|t|activeTab|currentTab|curTab|tabInfo|changeInfo)(?:\[\d+\])?\??\.(?:url|pendingUrl|title|favIconUrl)\b|tabs\.query\s*\(\s*\{[^}]*\burl\s*:/,clipboardRead:/clipboard\.readText|clipboardData|execCommand\(\s*['"]paste/,clipboardWrite:/clipboard\.writeText|clipboardData|execCommand\(\s*['"]copy/,geolocation:/geolocation/,nativeMessaging:/connectNative|sendNativeMessage/,declarativeNetRequestWithHostAccess:/declarativeNetRequest/,declarativeNetRequestFeedback:/declarativeNetRequest/,webRequestBlocking:/webRequest/,webRequestAuthProvider:/webRequest/};
+const NOCHK=new Set(['activeTab','unlimitedStorage','favicon','background','declarativeNetRequest']);
+const HEAVY=new Set(['cookies','history','clipboardRead','debugger','proxy','webRequest','webRequestBlocking','nativeMessaging','management','browsingData','desktopCapture','tabCapture','pageCapture','tabs']);
+function locNames(files,m){const k=/^__MSG_(.+)__$/.exec(m.name||''),keys=k?[k[1]]:['extName','appName','name','extensionName'],out=[];
+  for(const [n,c] of Object.entries(files)){const L=/_locales[\/]([^\/]+)[\/]messages\.json$/.exec(n);if(!L)continue;
+    try{const j=JSON.parse(c.replace(/^\uFEFF/,''));for(const key of keys){const e=Object.entries(j).find(([a])=>a.toLowerCase()===key.toLowerCase());if(e&&e[1]&&e[1].message)out.push({loc:L[1],file:n,msg:e[1].message})}}catch{}}
+  return out}
+function extra(files,m,mtext,mpath,ctx){
+  const out=[],names=locNames(files,m),en=names.find(x=>/^en/i.test(x.loc))||names[0],dn=/^__MSG_/.test(m.name||'')?(en?en.msg:''):(m.name||'');
+  const sn=x=>{const c=files[x.file],i=Math.max(0,c.indexOf(x.msg.slice(0,20)));return mkSnip(`${x.file} (${x.loc})`,c,i,Math.min(x.msg.length,60))};
+  const mp=(k)=>{const i=mtext.indexOf(k);return i<0?[]:[mkSnip(mpath,mtext,i,k.length)]};
+  const brandDef=BRAND.test(dn+' '+(m.description||'')),brandLoc=names.filter(x=>BRAND.test(x.msg)&&!BRAND.test(dn)),stuff=names.filter(x=>x.msg.length>75||(x.msg.match(/[,|·•–—]/g)||[]).length>=4);
+  if(brandDef)out.push(mk({cat:'imp',sev:'high',conf:'medium',policy:'Impersonation / copycat',title:`Name or description uses a well-known brand: ${(BRAND.exec(dn+' '+m.description)||[''])[0]}`,why:'Confirm the publisher is the official owner of this brand. Reusing a wallet/VPN brand name, icon or media misleads users.',file:mpath,snips:mp('"name"')}));
+  if(brandLoc.length)out.push(mk({cat:'imp',sev:'high',conf:'medium',policy:'Impersonation: localized title',title:`Localized titles impersonate a brand (${brandLoc.map(x=>x.loc).slice(0,6).join(', ')})`,why:'The default title is unbranded, but other locales carry a well-known wallet/VPN brand name.',file:brandLoc[0].file,count:brandLoc.length,snips:brandLoc.slice(0,2).map(sn)}));
+  if(stuff.length)out.push(mk({cat:'imp',sev:'medium',conf:'medium',policy:'Keyword stuffing',title:`Overlong / keyword-packed localized titles (${stuff.map(x=>x.loc).slice(0,6).join(', ')})`,why:'Titles over 75 characters or packed with separators and keywords are keyword stuffing.',file:stuff[0].file,count:stuff.length,snips:stuff.slice(0,2).map(sn)}));
+  const crypto=brandDef||names.some(x=>BRAND.test(x.msg))||/wallet|seed phrase|airdrop|\bswap\b/i.test(ctx.purpose);
+  for(const [name,code] of Object.entries(files)){
+    if(!/\.(?:m?js|html?)$/.test(name)||code.length>3e6||/vendor|node_modules|\.min\./i.test(name))continue;
+    const nav=/(?:tabs\.(?:create|update)|window\.open|location\.(?:href|assign|replace))[^;]{0,200}?https?:\/\/[^\s'"`]+/g;
+    for(const x of code.matchAll(nav)){const u=/https?:\/\/[^\s'"`]+/.exec(x[0])[0],lang=LANGX.test(code.slice(Math.max(0,x.index-600),x.index+300));
+      if(crypto&&SUSH.test(u)){out.push(mk({cat:'mal',sev:'critical',conf:'medium',policy:'Malware: crypto phishing',title:`Crypto-branded extension navigates to suspicious domain${lang?' depending on browser language':''}`,why:'A wallet-themed extension that sends users to a free-TLD/tunnel domain is a known crypto-phishing pattern.',file:name,line:snip(code,x.index,0).line,snips:[mkSnip(name,code,x.index,x[0].length)]}));break}
+      if(lang&&!/chrome:|localhost/.test(u)){out.push(mk({cat:'spam',sev:'high',conf:'medium',policy:'Spam: locale-gated redirect',title:'Opens an external site depending on browser language',why:'Behavior that changes by UI language and sends users to external domains hides spam or phishing from English-language reviewers.',file:name,line:snip(code,x.index,0).line,snips:[mkSnip(name,code,x.index,x[0].length)]}));break}}
+    if(/\bfetch\s*\(/.test(code)&&/alarms\.create|setInterval/.test(code)&&/tabs\.(?:update|create)|windows\.create|location\.(?:href|assign|replace)/.test(code)&&/redirect|\.url\b|\.link\b|config/i.test(code)){const i=code.search(/\bfetch\s*\(/);
+      out.push(mk({cat:'spam',sev:'high',conf:'low',policy:'Spam: remote-config redirect (verify)',title:'Periodically fetches remote config and navigates tabs',why:'Fetching a server-controlled config on a timer and then opening or redirecting pages lets the developer push users to arbitrary URLs after review.',file:name,line:snip(code,i,0).line,snips:[mkSnip(name,code,i,6)]}))}}
+  /* MSAP: permission declared, never used in code */
+  const code=ctx.all,seen=new Set();
+  for(const p of [...(m.permissions||[]),...(m.optional_permissions||[])]){
+    if(p.includes('://')||p.includes('.')||p==='<all_urls>'||NOCHK.has(p)||seen.has(p))continue;seen.add(p);
+    const re=UP[p]||new RegExp('(?:chrome|browser)\\.'+p+'\\b');if(re.test(code))continue;
+    out.push(mk({cat:'perm',sev:HEAVY.has(p)?'high':'medium',conf:'medium',policy:'MSAP / least privilege: unused permission',title:`Permission “${p}” declared but never used in code`,why:'The manifest requests this permission but no corresponding API or property appears anywhere in the package. Remove it.',file:mpath,snips:mp(`"${p}"`)}))}
+  return out}
+
+/* ── Obfuscation-multiple: merge strong obfuscation hits into one finding instead of many noisy ones ── */
+const OSTRONG={hexid:'_0x renamed identifiers',hexesc:'\\x escape strings',hexprop:'hex-encoded property names',strrot:'string-array rotation',strlookup:'hex string-lookup wrapper',packer:'Dean Edwards packer',jsfuck:'JSFuck',b64eval:'eval(atob())'},OWEAK=new Set(['longvar','fcc','dbg','blob','uniesc']);
+function obfConsolidate(F){
+  const strong=F.filter(f=>f.cat==='obf'&&OSTRONG[f.rule]&&f.conf!=='low');
+  if(!strong.length)return F;
+  const files=[...new Set(strong.map(f=>f.file))],techs=[...new Set(strong.map(f=>OSTRONG[f.rule]))];
+  if(files.length<2&&techs.length<2)return F;
+  const multi=files.length>=2,rest=F.filter(f=>!strong.includes(f)&&!(f.cat==='obf'&&OWEAK.has(f.rule)));
+  const snips=[],seen=new Set();for(const f of strong){if(!seen.has(f.file)&&f.snips[0]){seen.add(f.file);snips.push(f.snips[0])}if(snips.length>=3)break}
+  rest.push(mk({cat:'obf',sev:'critical',conf:'high',rule:'obfmulti',policy:multi?'Obfuscation-multiple: obfuscated code in several files':'Obfuscation: multi-layered techniques',
+    title:multi?`Obfuscation-multiple: ${files.length} files (${files.slice(0,4).join(', ')}${files.length>4?', …':''})`:`Multi-layered obfuscation in ${files[0]}`,
+    why:`Techniques found: ${techs.join('; ')}. Heavy obfuscation hides logic and strings from review and is prohibited regardless of intent.`,
+    file:files[0],line:snips[0]&&snips[0].line,count:strong.reduce((n,f)=>n+f.count,0),snips}));
+  return rest}
 
 /* ── UI ── */
 let file=null,gem=false;
@@ -263,9 +320,10 @@ async function run(){
     const domains=[...new Set((all.match(/https?:\/\/([\w-]+(?:\.[\w-]+)+)/g)||[]).map(u=>new URL(u).hostname))].filter(h=>!/^(www\.w3\.org|schemas\.|chrome\.google\.com|.*\.?(google|gstatic|googleapis|mozilla|github)\.(com|org)|.*\.?(example|localhost)$)/.test(h));
     const sus=h=>/bit\.ly|tinyurl|ngrok|pastebin|raw\.githubusercontent|herokuapp|\.xyz$|\.top$|\.pw$|\.tk$|\.cc$|^\d+\.\d+\.\d+\.\d+$/.test(h);
     const ctx={all,perms,priv,name:m.name||file.name,purpose:`${m.name||''} ${m.description||''} ${desc}`,sink:NET.test(all)&&domains.length>0};
-    step(1);await tick();let F=scan(files,ctx);
-    domains.filter(sus).slice(0,3).forEach(h=>{const i=all.indexOf(h);F.push(mk({cat:'mal',sev:'medium',conf:'medium',policy:'Malware: suspicious endpoint',title:`Suspicious host: ${h}`,why:'Paste sites, tunnels, raw file hosts, free TLDs and bare IPs are typical command-and-control or payload hosts.',file:'(source)',snips:[mkSnip('first reference',all,i,h.length)]}))});
-    step(2);await tick();const mc=manifestChecks(m,mtext,ctx);mc.out.forEach(f=>{if(f.file==='manifest.json'){f.file=mpath;f.snips.forEach(s=>{if(s.label==='manifest.json')s.label=mpath})}});const ob=outbound(files,ctx);F.push(...mc.out,...ob.findings);
+    step(1);await tick();let F=scan(files,ctx);F.push(...extra(files,m,mtext,mpath,ctx));F=obfConsolidate(F);
+    const ob=outbound(files,ctx),postHosts=new Set(ob.rows.map(r=>r.host));
+    domains.filter(h=>sus(h)&&!postHosts.has(h)).slice(0,3).forEach(h=>{const i=all.indexOf(h);F.push(mk({cat:'mal',sev:'medium',conf:'medium',policy:'Malware: suspicious endpoint',title:`Suspicious host: ${h}`,why:'Paste sites, tunnels, raw file hosts, free TLDs and bare IPs are typical command-and-control or payload hosts.',file:'(source)',snips:[mkSnip('first reference',all,i,h.length)]}))});
+    step(2);await tick();const mc=manifestChecks(m,mtext,ctx);mc.out.forEach(f=>{if(f.file==='manifest.json'){f.file=mpath;f.snips.forEach(s=>{if(s.label==='manifest.json')s.label=mpath})}});F.push(...mc.out,...ob.findings);
     step(3);await tick();const ai=gem?await aiTriage(ctx,F):null;
     if(ai&&ai.triage)for(const t of ai.triage){const f=F.find(x=>x.id===t.id);if(!f)continue;f.ai={v:t.verdict,reason:t.reason};if(t.verdict==='likely_false_positive'&&f.conf!=='high'&&f.sev!=='critical')f.dismissed=true}
     step(4);await tick();
@@ -281,7 +339,7 @@ function render(d){
   const fh=f=>`<details class="f ${f.dismissed?'dis':''}" style="--c:${COL[f.sev]}" ${f.sev==='critical'&&!f.dismissed?'open':''}><summary><b>${esc(f.title)}</b><span class="tag">${f.sev.toUpperCase()} · ${esc(f.policy)}</span><span class="loc">${esc(f.file||'')}${f.line?':'+f.line:''}</span><span class="cf">${f.conf} confidence${f.count>1?` · ${f.count} matches`:''}${f.dismissed?' · dismissed by AI triage':''}</span></summary><div class="fb"><p>${esc(f.why)}</p>${f.snips.map(s=>`<div class="cap">${esc(s.label)}</div><pre>${s.lines.map(l=>`<span class="${l.hit?'hit':''}"><u>${l.n}</u>${esc(l.t)}</span>`).join('')}</pre>`).join('')}${f.ai?`<p class="ai">On-device Gemini: <b>${esc(f.ai.v)}</b> — ${esc(f.ai.reason)}</p>`:''}</div></details>`;
   const sec=Object.entries(CAT).map(([k,t])=>{const L=d.F.filter(f=>f.cat===k).sort((a,b)=>SEV[b.sev]-SEV[a.sev]);return L.length?`<h2>${t} <small style="font-size:13px;color:var(--mu)">(${L.length})</small></h2>${L.map(fh).join('')}`:''}).join('');
   const chk=Object.entries(CAT).map(([k,t])=>{const L=live.filter(f=>f.cat===k),top=ORD.find(s=>L.some(f=>f.sev===s));return`<div style="--c:${top?COL[top]:COL.ok}"><b>${t}</b><span>${top?top.toUpperCase()+' · '+L.length+' finding'+(L.length>1?'s':''):'No issues'}</span></div>`}).join('');
-  const obT=d.ob.length?`<table><tr><th>Destination</th><th>Call</th><th>Data sent</th><th>In privacy policy</th><th>Needed for function</th><th>Where</th></tr>${d.ob.map(r=>`<tr><td>${esc(r.host)}</td><td>${esc(r.method)}${r.count>1?' ×'+r.count:''}</td><td>${esc(r.cats.join(', ')||'unspecified')}</td><td style="color:${r.local||r.disc==='Yes'?COL.ok:COL.high};font-weight:700">${esc(r.disc)}</td><td style="color:${r.local||r.need==='Yes'?COL.ok:COL.high};font-weight:700">${esc(r.need)}</td><td style="font:12px ui-monospace,Consolas,monospace">${esc(r.where.slice(0,2).join(', '))}</td></tr>`).join('')}</table>`:'<div class="prose">No POST, WebSocket or beacon calls found.</div>';
+  const obT=d.ob.length?`<table><tr><th>Destination</th><th>Call</th><th>Data sent</th><th>In privacy policy</th><th>Needed (info only)</th><th>Where</th></tr>${d.ob.map(r=>`<tr><td>${esc(r.host)}</td><td>${esc(r.method)}${r.count>1?' ×'+r.count:''}</td><td>${esc(r.cats.join(', ')||'unspecified')}</td><td style="color:${r.local||r.disc==='Yes'?COL.ok:COL.high};font-weight:700">${esc(r.disc)}</td><td style="color:${r.local||r.need==='Yes'?COL.ok:COL.high};font-weight:700">${esc(r.need)}</td><td style="font:12px ui-monospace,Consolas,monospace">${esc(r.where.slice(0,2).join(', '))}</td></tr>`).join('')}</table>`:'<div class="prose">No POST, WebSocket or beacon calls found.</div>';
   $('rp').innerHTML=`<div style="display:flex;justify-content:space-between;margin-bottom:12px"><button class="btn" onclick="show('up')">← New audit</button><span><button class="btn" id="ex">Export JSON</button> <button class="btn" onclick="print()">Print</button></span></div>
   ${d.notice?`<div class="sub" style="margin:0 0 12px">${esc(d.notice)}</div>`:''}<div class="vd" style="--c:${COL[v[1]]}"><div class="vt">${v[0]}</div><div class="sub">${esc(d.m.name||'')} · Manifest v${d.m.manifest_version} · ${d.paths.length} files · risk score ${score}/100 · ${live.length} active finding${live.length===1?'':'s'}</div>
   <div class="bar">${ORD.map(s=>`<i style="width:${cnt[s]/tot*100}%;background:${COL[s]}"></i>`).join('')}</div><div class="lg">${ORD.map(s=>`<span style="--c:${COL[s]}">${cnt[s]} ${s}</span>`).join('')}</div>
@@ -289,7 +347,7 @@ function render(d){
   <div class="pol">${chk}</div>
   ${d.ai&&d.ai.summary?`<h2>On-device Gemini assessment</h2><div class="prose">${esc(d.ai.summary)}\n\nPurpose match: <b>${esc(d.ai.purpose_match||'n/a')}</b></div>`:d.ai&&d.ai.error?`<div class="note">Gemini triage failed (${esc(d.ai.error)}); results are from the static engine only.</div>`:''}
   ${sec||'<h2>Findings</h2><div class="prose">No findings triggered.</div>'}
-  <h2>Outbound data transmission</h2>${obT}<h2>Permissions</h2><table><tr><th>Permission</th><th>Status</th><th>Reasoning</th></tr>${d.rows.map(r=>`<tr><td>${esc(r[0])}</td><td style="color:${COL[r[1]]};font-weight:700">${r[1]==='ok'?'Justified':r[1].toUpperCase()}</td><td>${esc(r[2])}</td></tr>`).join('')||'<tr><td colspan=3>No API permissions declared.</td></tr>'}</table>
+  <h2>Outbound data transmission</h2><div class="note" style="margin:0 0 8px;border:0;padding:0">POST / WebSocket / beacon calls (including login, sign-up and email/password) are judged against the privacy policy only and are never reported as malware. Local calls are ignored.</div>${obT}<h2>Permissions</h2><table><tr><th>Permission</th><th>Status</th><th>Reasoning</th></tr>${d.rows.map(r=>`<tr><td>${esc(r[0])}</td><td style="color:${COL[r[1]]};font-weight:700">${r[1]==='ok'?'Justified':r[1].toUpperCase()}</td><td>${esc(r[2])}</td></tr>`).join('')||'<tr><td colspan=3>No API permissions declared.</td></tr>'}</table>
   <h2>External hosts referenced</h2><table>${d.domains.map(x=>`<tr><td>${esc(x[0])}</td><td style="color:${x[1]?COL.high:'var(--mu)'}">${x[1]?'Suspicious host type':'Referenced in source'}</td></tr>`).join('')||'<tr><td>None found</td></tr>'}</table>`;
   $('ex').onclick=async()=>{const json=JSON.stringify({verdict:v[0],score,findings:d.F.map(({snips,...f})=>({...f,evidence:snips}))},null,2);
     let dl=null;try{dl=window.claude?await claude.use('downloads'):null}catch{}
